@@ -7,7 +7,7 @@ class ParseError(Exception):
     pass
 
 class ParseTree: # abstract class
-    
+
     def __init__(self):
         self.is_first_order = None
 
@@ -22,6 +22,35 @@ class Negation(ParseTree):
 
     def parse_output(self) -> int:
         return 2 if self.is_first_order else 7
+    
+    def is_literal(self):
+        return type(self.child) is Variable
+    
+    def literal(self):
+        if not self.is_literal: raise TypeError(f"{str(self)} is not a literal")
+        return Literal(self.child, False)
+    
+    def get_expansion(self):
+        if type(self.child) == Negation:
+            return {
+                "type": "alpha",
+                "formulas": (self.child.child,),
+            }
+        elif type(self.child) == Conjunction:
+            return {
+                "type": "beta",
+                "formulas": (Negation(self.child.left), Negation(self.child.right)),
+            }
+        elif type(self.child) == Disjunction:
+            return {
+                "type": "alpha",
+                "formulas": (Negation(self.child.left), Negation(self.child.right)),
+            }
+        elif type(self.child) == Implication:
+            return {
+                "type": "alpha",
+                "formulas": (self.child.left, Negation(self.child.right)),
+            }
 
 class Quantifier(ParseTree): # abstract class
 
@@ -82,24 +111,45 @@ class BinaryConnective(ParseTree): # abstract class
     
     def parse_output(self) -> int:
         return 5 if self.is_first_order else 8
+    
+    def is_literal(self):
+        return False
 
 class Conjunction(BinaryConnective):
 
     def __init__(self, left: ParseTree, right: ParseTree):
         super().__init__(left, right)
         self.con = "^"
+    
+    def get_expansion(self):
+        return {
+            "type": "alpha",
+            "formulas": (self.left, self.right),
+        }
 
 class Disjunction(BinaryConnective):
 
     def __init__(self, left: ParseTree, right: ParseTree):
         super().__init__(left, right)
         self.con = "v"
+    
+    def get_expansion(self):
+        return {
+            "type": "beta",
+            "formulas": (self.left, self.right),
+        }
 
 class Implication(BinaryConnective):
 
     def __init__(self, left: ParseTree, right: ParseTree):
         super().__init__(left, right)
         self.con = ">"
+    
+    def get_expansion(self):
+        return {
+            "type": "beta",
+            "formulas": (Negation(self.left), self.right),
+        }
 
 class Variable(ParseTree):
 
@@ -114,6 +164,12 @@ class Variable(ParseTree):
     
     def parse_output(self) -> int:
         return 6
+    
+    def is_literal(self):
+        return True
+    
+    def literal(self):
+        return Literal(self, True)
 
 class Predicate(ParseTree):
 
@@ -135,6 +191,15 @@ class NotAFormula(ParseTree):
     
     def parse_output(self) -> int:
         return 0
+
+class Literal():
+    def __init__(self, atom: Variable | Predicate, truth_state: bool):
+        self._atom = atom
+        self.truth_state = truth_state
+    
+    @property
+    def atom(self):
+        return str(self._atom)
 
 class Parser: # abstract class
 
@@ -255,6 +320,60 @@ def generate_parse_tree(fmla) -> ParseTree:
     cache[fmla] = res
     return res
 
+def is_fully_expanded(theory: set):
+    for formula in theory:
+        if not formula.is_literal(): return False
+    return True
+
+def contains_contradiction(theory: set):
+    truth_values = {}
+    for formula in theory:
+        if formula.is_literal():
+            literal = formula.literal()
+            if literal.atom in truth_values and truth_values[literal.atom] != literal.truth_state:
+                return True
+            truth_values[literal.atom] = literal.truth_state
+    return False
+
+def get_non_literal(theory: set):
+    beta_formula = None
+    for formula in theory:
+        if type(formula) is Conjunction:
+            return formula
+        elif type(formula) is Negation and not formula.is_literal():
+            if type(formula.child) in {Negation, Disjunction, Implication}:
+                return formula
+            elif type(formula) == Conjunction:
+                beta_formula = formula
+        elif type(formula) in {Disjunction, Implication}:
+            beta_formula = formula
+    if beta_formula is None:
+        raise TypeError("No non-literals in theory")
+    return beta_formula
+
+
+def tableau_is_satisfiable(tableau: list[set]):
+    while len(tableau):
+        theory = tableau.pop()
+        if is_fully_expanded(theory) and not contains_contradiction(theory):
+            return 1
+        non_literal = get_non_literal(theory)
+        if non_literal.is_first_order: return 1
+        expansion = non_literal.get_expansion()
+        theory.remove(non_literal)
+        if expansion["type"] == "alpha":
+            for new_formula in expansion["formulas"]:
+                theory.add(new_formula)
+            if theory not in tableau and not contains_contradiction(theory):
+                tableau.append(theory)
+        if expansion["type"] == "beta":
+            for new_formula in expansion["formulas"]:
+                new_theory = theory.copy()
+                new_theory.add(new_formula)
+                if new_theory not in tableau and not contains_contradiction(new_theory):
+                    tableau.append(new_theory)
+    return 0
+
 '''
 SKELETON CODE BELOW
 '''
@@ -283,12 +402,12 @@ def rhs(fmla):
 
 # You may choose to represent a theory as a set or a list
 def theory(fmla):#initialise a theory with a single formula in it
-    return {fmla}
+    return {generate_parse_tree(fmla)}
 
 #check for satisfiability
 def sat(tableau):
 #output 0 if not satisfiable, output 1 if satisfiable, output 2 if number of constants exceeds MAX_CONSTANTS
-    return 0
+    return tableau_is_satisfiable(tableau)
 
 #DO NOT MODIFY THE CODE BELOW
 f = open('input.txt')
