@@ -141,16 +141,19 @@ class Parser: # abstract class
     @staticmethod
     def lexer(s):
         for c in s:
-            if c==" ":
-                continue
             yield c
         while True:
             yield '\0'
 
     def __init__(self, s: str):
-        self.string = s
         self.lex = self.lexer(s)
         self.current = next(self.lex)
+    
+    def parse(self):
+        try:
+            return self.FMLA()
+        except ParseError:
+            return NotAFormula()
     
     def expect(self, c):
         op = (lambda lhs, rhs: lhs in rhs) if hasattr(c, '__iter__') else (lambda lhs, rhs: lhs == rhs)
@@ -158,9 +161,6 @@ class Parser: # abstract class
             self.current = next(self.lex)
             return True
         raise ParseError("Unexpected character", self.current, "expected", c)
-    
-    def parse(self) -> ParseTree:
-        raise NotImplementedError
     
     def FMLA(self) -> ParseTree:
         raise NotImplementedError
@@ -184,13 +184,9 @@ class PropositionalParser(Parser):
         super().__init__(s)
     
     def parse(self) -> ParseTree:
-        try:
-            tree = self.FMLA()
-        except ParseError:
-            tree = NotAFormula()
-        finally:
-            tree.is_first_order = False
-            return tree
+        tree = super().parse()
+        tree.is_first_order = False
+        return tree
     
     def FMLA(self):
         if self.current in PROPOSITIONAL_VARIABLES:
@@ -211,13 +207,9 @@ class FirstOrderParser(Parser):
         super().__init__(s)
     
     def parse(self) -> ParseTree:
-        try:
-            tree = self.FMLA()
-        except ParseError:
-            tree = NotAFormula()
-        finally:
-            tree.is_first_order = True
-            return tree
+        tree = super().parse()
+        tree.is_first_order = True
+        return tree
 
     def FMLA(self):
         if self.current in PREDICATE_SYMBOLS:
