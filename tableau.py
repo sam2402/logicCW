@@ -3,6 +3,13 @@ PROPOSITIONAL_VARIABLES = {"p", "q", "r", "s"}
 FIRST_ORDER_VARIABLES = {"x", "y", "z", "w"}
 PREDICATE_SYMBOLS = {"P", "Q", "R", "S"}
 
+GENERATED_VARIABLES = set()
+
+def get_new_variable():
+    new_var = f"var{len(GENERATED_VARIABLES)}"
+    GENERATED_VARIABLES.add(new_var)
+    return new_var
+
 class ParseError(Exception):
     pass
 
@@ -10,6 +17,33 @@ class ParseTree: # abstract class
 
     def __init__(self):
         self.is_first_order = None
+    
+    def replace_variable(self, old_var: str, new_var: str):
+        raise NotImplementedError
+
+class Variable(ParseTree):
+
+    def __init__(self, variable: str):
+        super().__init__()
+        # if variable not in PROPOSITIONAL_VARIABLES.union(FIRST_ORDER_VARIABLES):
+        #     raise ParseError("Invalid variable name")
+        self.variable = variable
+    
+    def __str__(self) -> str:
+        return str(self.variable)
+    
+    def parse_output(self) -> int:
+        return 6
+    
+    def is_literal(self):
+        return True
+    
+    def literal(self):
+        return Literal(self, True)
+    
+    def replace_variable(self, old_var: str, new_var: str):
+        return Variable(new_var) if self.variable == old_var else Variable(self.variable)
+    
 
 class Negation(ParseTree):
 
@@ -24,11 +58,14 @@ class Negation(ParseTree):
         return 2 if self.is_first_order else 7
     
     def is_literal(self):
-        return type(self.child) is Variable
+        return type(self.child) in {Variable, Predicate}
     
     def literal(self):
         if not self.is_literal: raise TypeError(f"{str(self)} is not a literal")
         return Literal(self.child, False)
+    
+    def replace_variable(self, old_var: str, new_var: str):
+        return Negation(self.child.replace_variable(old_var, new_var))
     
     def get_expansion(self):
         if type(self.child) == Negation:
@@ -51,28 +88,41 @@ class Negation(ParseTree):
                 "type": "alpha",
                 "formulas": (self.child.left, Negation(self.child.right)),
             }
+        elif type(self.child) == UniversalQuantifier:
+            bound_variable = str(self.child.variable)
+            new_bound_variable = get_new_variable()
+            return {
+                "type": "delta",
+                "formulas": (Negation(self.child.child.replace_variable(bound_variable, new_bound_variable)),),
+            }
 
 class Quantifier(ParseTree): # abstract class
 
     @staticmethod
-    def make(symbol, variable: str, child: ParseTree):
+    def make(symbol, variable: Variable, child: ParseTree):
         if symbol == "A":
             return UniversalQuantifier(variable, child)
         if symbol == "E":
             return ExistentialQuantifier(variable, child)
 
-    def __init__(self, variable: str, child: ParseTree):
+    def __init__(self, variable: Variable, child: ParseTree):
         super().__init__()
         self.variable = variable
         self.child = child
         self.symbol = None
     
+    def replace_variable(self, old_var: str, new_var: str):
+        return type(self)(self.variable.replace_variable(old_var, new_var), self.child.replace_variable(old_var, new_var))
+    
     def __str__(self) -> str:
         return f"{self.symbol}{self.variable}{str(self.child)}"
+    
+    def is_literal(self) -> bool:
+        return False
 
 class UniversalQuantifier(Quantifier):
 
-    def __init__(self, variable: str, child: ParseTree):
+    def __init__(self, variable: Variable, child: ParseTree):
         super().__init__(variable, child)
         self.symbol = "A"
     
@@ -81,12 +131,18 @@ class UniversalQuantifier(Quantifier):
     
 class ExistentialQuantifier(Quantifier):
 
-    def __init__(self, variable: str, child: ParseTree):
+    def __init__(self, variable: Variable, child: ParseTree):
         super().__init__(variable, child)
         self.symbol = "E"
 
     def parse_output(self) -> int:
         return 4
+    
+    def get_expansion(self):
+        return {
+            "type": "delta",
+            "formulas": (self.child.replace_variable(str(self.variable), get_new_variable()),),
+        }
 
 class BinaryConnective(ParseTree): # abstract class
 
@@ -114,6 +170,10 @@ class BinaryConnective(ParseTree): # abstract class
     
     def is_literal(self):
         return False
+    
+    def replace_variable(self, old_var: str, new_var: str):
+        return type(self)(self.left.replace_variable(old_var, new_var), self.right.replace_variable(old_var, new_var))
+    
 
 class Conjunction(BinaryConnective):
 
@@ -151,26 +211,6 @@ class Implication(BinaryConnective):
             "formulas": (Negation(self.left), self.right),
         }
 
-class Variable(ParseTree):
-
-    def __init__(self, variable: str):
-        super().__init__()
-        if variable not in PROPOSITIONAL_VARIABLES.union(FIRST_ORDER_VARIABLES):
-            raise ParseError("Invalid variable name")
-        self.variable = variable
-    
-    def __str__(self) -> str:
-        return str(self.variable)
-    
-    def parse_output(self) -> int:
-        return 6
-    
-    def is_literal(self):
-        return True
-    
-    def literal(self):
-        return Literal(self, True)
-
 class Predicate(ParseTree):
 
     def __init__(self, symbol: str, left: Variable, right: Variable):
@@ -186,6 +226,16 @@ class Predicate(ParseTree):
 
     def parse_output(self) -> int:
         return 1
+    
+    def replace_variable(self, old_var: str, new_var: str):
+        return Predicate(self.symbol, self.left.replace_variable(old_var, new_var), self.right.replace_variable(old_var, new_var))
+    
+    def is_literal(self) -> bool:
+        return True
+    
+    def literal(self):
+        return Literal(self, True)
+    
 
 class NotAFormula(ParseTree):
     
@@ -326,6 +376,7 @@ def is_fully_expanded(theory: set):
     return True
 
 def contains_contradiction(theory: set):
+    
     truth_values = {}
     for formula in theory:
         if formula.is_literal():
@@ -337,19 +388,27 @@ def contains_contradiction(theory: set):
 
 def get_non_literal(theory: set):
     beta_formula = None
+    delta_formula = None
     for formula in theory:
         if type(formula) is Conjunction:
             return formula
         elif type(formula) is Negation and not formula.is_literal():
             if type(formula.child) in {Negation, Disjunction, Implication}:
                 return formula
-            elif type(formula) == Conjunction:
+            elif type(formula.child) == Conjunction:
                 beta_formula = formula
+            elif type(formula.child) == UniversalQuantifier:
+                delta_formula = formula
         elif type(formula) in {Disjunction, Implication}:
             beta_formula = formula
-    if beta_formula is None:
-        raise TypeError("No non-literals in theory")
-    return beta_formula
+        elif type(formula) == ExistentialQuantifier:
+            delta_formula = formula
+    if beta_formula is not None:
+        return beta_formula
+    elif delta_formula is not None:
+        return delta_formula
+    raise TypeError("No non-literals in theory")
+    
 
 
 def tableau_is_satisfiable(tableau: list[set]):
@@ -358,8 +417,9 @@ def tableau_is_satisfiable(tableau: list[set]):
         if is_fully_expanded(theory) and not contains_contradiction(theory):
             return 1
         non_literal = get_non_literal(theory)
-        if non_literal.is_first_order: return 1
         expansion = non_literal.get_expansion()
+        if len(GENERATED_VARIABLES) > MAX_CONSTANTS:
+            return 2
         theory.remove(non_literal)
         if expansion["type"] == "alpha":
             for new_formula in expansion["formulas"]:
@@ -367,6 +427,12 @@ def tableau_is_satisfiable(tableau: list[set]):
             if theory not in tableau and not contains_contradiction(theory):
                 tableau.append(theory)
         if expansion["type"] == "beta":
+            for new_formula in expansion["formulas"]:
+                new_theory = theory.copy()
+                new_theory.add(new_formula)
+                if new_theory not in tableau and not contains_contradiction(new_theory):
+                    tableau.append(new_theory)
+        if expansion["type"] == "delta":
             for new_formula in expansion["formulas"]:
                 new_theory = theory.copy()
                 new_theory.add(new_formula)
